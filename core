@@ -1,1 +1,26 @@
 binance_client.py
+import ccxt
+import os
+from dotenv import load_dotenv
+load_dotenv()
+# إعدادات الـ API
+api_key = os.getenv('BINANCE_API_KEY')
+api_secret = os.getenv('BINANCE_API_SECRET')
+print("API Key موجود؟", bool(api_key))
+print("Secret موجود؟", bool(api_secret))
+
+if not api_key or not api_secret:
+    print("خطأ: الـ API Key أو الـ Secret مش موجودين في ملف .env")
+    exit()
+# إنشاء اتصال مع بينانس
+exchange = ccxt.binance({
+    'apiKey': api_key,
+    'secret': api_secret,
+    'enableRateLimit': True,
+    'options': {'defaultType': 'spot'}})
+try:
+    balance = exchange.fetch_balance()
+    print("الرصيد الحالي:")
+    print(balance)
+except Exception as e:
+    print("خطأ في الاتصال:", str(e))
