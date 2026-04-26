@@ -1,26 +1,290 @@
-binance_client.py
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+BinanceClient - عميل الاتصال بـ Binance
+يوفر واجهة سهلة للتداول وجلب البيانات
+"""
+
 import ccxt
 import os
 from dotenv import load_dotenv
-load_dotenv()
-# إعدادات الـ API
-api_key = os.getenv('BINANCE_API_KEY')
-api_secret = os.getenv('BINANCE_API_SECRET')
-print("API Key موجود؟", bool(api_key))
-print("Secret موجود؟", bool(api_secret))
+from datetime import datetime
 
-if not api_key or not api_secret:
-    print("خطأ: الـ API Key أو الـ Secret مش موجودين في ملف .env")
-    exit()
-# إنشاء اتصال مع بينانس
-exchange = ccxt.binance({
-    'apiKey': api_key,
-    'secret': api_secret,
-    'enableRateLimit': True,
-    'options': {'defaultType': 'spot'}})
-try:
-    balance = exchange.fetch_balance()
-    print("الرصيد الحالي:")
-    print(balance)
-except Exception as e:
-    print("خطأ في الاتصال:", str(e))
+class BinanceClient:
+    """عميل Binance للتداول الفوري والآجل"""
+    
+    def __init__(self):
+        """تهيئة الاتصال بـ Binance"""
+        # تحميل المتغيرات من ملف .env
+        load_dotenv()
+        
+        self.api_key = os.getenv('BINANCE_API_KEY')
+        self.secret_key = os.getenv('BINANCE_SECRET_KEY')
+        
+        if not self.api_key or not self.secret_key:
+            raise Exception("❌ خطأ: لم يتم العثور على مفاتيح API في ملف .env")
+        
+        # إنشاء كائن Binance
+        self.exchange = ccxt.binance({
+            'apiKey': self.api_key,
+            'secret': self.secret_key,
+            'enableRateLimit': True,
+            'options': {
+                'defaultType': 'spot',  # التداول الفوري
+                'adjustForTimeDifference': True
+            }
+        })
+        
+        # اختبار الاتصال
+        try:
+            self.exchange.load_markets()
+            print("✅ تم الاتصال بـ Binance بنجاح")
+        except Exception as e:
+            raise Exception(f"❌ فشل الاتصال بـ Binance: {e}")
+    
+    def get_balance(self, currency='USDT'):
+        """
+        جلب رصيد عملة معينة
+        
+        Args:
+            currency: رمز العملة (مثال: 'USDT', 'BTC')            
+        Returns:
+            الرصيد المتاح (float)
+        """
+        try:
+            balance = self.exchange.fetch_balance()
+            return balance[currency]['free']
+        except Exception as e:
+            print(f"❌ خطأ في جلب رصيد {currency}: {e}")
+            return 0.0
+    
+    def get_total_balance(self):
+        """
+        جلب إجمالي قيمة المحفظة بـ USDT
+        
+        Returns:
+            الإجمالي (float)
+        """
+        try:
+            balance = self.exchange.fetch_balance()
+            total = 0.0
+            
+            # جلب سعر USDT (دائماً 1)
+            usdt_free = balance.get('USDT', {}).get('free', 0)
+            total += usdt_free
+            
+            # جلب أسعار العملات الأخرى وتحويلها لـ USDT
+            major_coins = ['BTC', 'ETH', 'BNB', 'SOL', 'XRP', 'ADA', 'DOGE']
+            
+            for coin in major_coins:
+                if coin in balance and balance[coin]['free'] > 0:
+                    try:
+                        symbol = f"{coin}/USDT"
+                        ticker = self.exchange.fetch_ticker(symbol)
+                        price = ticker['last']
+                        value = balance[coin]['free'] * price
+                        total += value
+                    except:
+                        continue
+            
+            return total
+            
+        except Exception as e:
+            print(f"❌ خطأ في حساب إجمالي الرصيد: {e}")
+            return 0.0
+    
+    def get_ticker(self, symbol):
+        """
+        جلب معلوماتTicker لزوج معين
+                Args:
+            symbol: زوج التداول (مثال: 'BTC/USDT')
+            
+        Returns:
+            dict: يحتوي على السعر، التغير، الحجم، إلخ
+        """
+        try:
+            ticker = self.exchange.fetch_ticker(symbol)
+            
+            return {
+                'symbol': symbol,
+                'last': ticker['last'],
+                'bid': ticker['bid'],
+                'ask': ticker['ask'],
+                'high': ticker['high'],
+                'low': ticker['low'],
+                'volume': ticker['baseVolume'],
+                'percentage': ticker['percentage'],
+                'change': ticker['change'],
+                'timestamp': ticker['timestamp']
+            }
+            
+        except Exception as e:
+            print(f"❌ خطأ في جلب Ticker لـ {symbol}: {e}")
+            return {
+                'symbol': symbol,
+                'last': 0,
+                'bid': 0,
+                'ask': 0,
+                'high': 0,
+                'low': 0,
+                'volume': 0,
+                'percentage': 0,
+                'change': 0,
+                'timestamp': None
+            }
+    
+    def get_ohlcv(self, symbol, timeframe='1h', limit=100):
+        """
+        جلب بيانات الشموع (Candlestick)
+        
+        Args:
+            symbol: زوج التداول
+            timeframe: الإطار الزمني ('1m', '5m', '15m', '1h', '4h', '1d')
+            limit: عدد الشموع
+            
+        Returns:
+            list: قائمة بالشموع [timestamp, open, high, low, close, volume]
+        """
+        try:            ohlcv = self.exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
+            return ohlcv
+        except Exception as e:
+            print(f"❌ خطأ في جلب OHLCV لـ {symbol}: {e}")
+            return []
+    
+    def create_order(self, symbol, side, amount, price=None):
+        """
+        إنشاء أمر شراء أو بيع
+        
+        Args:
+            symbol: زوج التداول
+            side: 'buy' أو 'sell'
+            amount: الكمية
+            price: السعر (للأوامر المحددة - Limit Orders)
+            
+        Returns:
+            dict: تفاصيل الأمر
+        """
+        try:
+            if price:
+                # Limit Order
+                order = self.exchange.create_limit_order(symbol, side, amount, price)
+                order_type = "Limit"
+            else:
+                # Market Order
+                order = self.exchange.create_market_order(symbol, side, amount)
+                order_type = "Market"
+            
+            print(f"✅ تم إنشاء أمر {order_type} {side.upper()}")
+            print(f"   الزوج: {symbol}")
+            print(f"   الكمية: {amount}")
+            if price:
+                print(f"   السعر: {price}")
+            
+            return order
+            
+        except Exception as e:
+            print(f"❌ خطأ في إنشاء الأمر: {e}")
+            return None
+    
+    def get_open_orders(self, symbol=None):
+        """
+        جلب الأوامر المفتوحة
+        
+        Args:
+            symbol: زوج التداول (اختياري)
+            
+        Returns:
+            list: قائمة الأوامر المفتوحة        """
+        try:
+            orders = self.exchange.fetch_open_orders(symbol)
+            return orders
+        except Exception as e:
+            print(f"❌ خطأ في جلب الأوامر المفتوحة: {e}")
+            return []
+    
+    def cancel_order(self, order_id, symbol):
+        """
+        إلغاء أمر معين
+        
+        Args:
+            order_id: معرف الأمر
+            symbol: زوج التداول
+            
+        Returns:
+            bool: True إذا تم الإلغاء بنجاح
+        """
+        try:
+            self.exchange.cancel_order(order_id, symbol)
+            print(f"✅ تم إلغاء الأمر {order_id}")
+            return True
+        except Exception as e:
+            print(f"❌ خطأ في إلغاء الأمر: {e}")
+            return False
+    
+    def get_my_trades(self, symbol=None, limit=10):
+        """
+        جلب سجل التداولات
+        
+        Args:
+            symbol: زوج التداول (اختياري)
+            limit: عدد التداولات
+            
+        Returns:
+            list: قائمة التداولات
+        """
+        try:
+            trades = self.exchange.fetch_my_trades(symbol, limit=limit)
+            return trades
+        except Exception as e:
+            print(f"❌ خطأ في جلب التداولات: {e}")
+            return []
+    
+    def calculate_rsi(self, symbol, timeframe='1h', period=14):
+        """
+        حساب مؤشر القوة النسبية (RSI)
+        
+        Args:            symbol: زوج التداول
+            timeframe: الإطار الزمني
+            period: الفترة (الافتراضي 14)
+            
+        Returns:
+            float: قيمة RSI
+        """
+        try:
+            ohlcv = self.get_ohlcv(symbol, timeframe, limit=period+1)
+            
+            if len(ohlcv) < period + 1:
+                return 50.0
+            
+            closes = [candle[4] for candle in ohlcv]
+            
+            gains = []
+            losses = []
+            
+            for i in range(1, len(closes)):
+                change = closes[i] - closes[i-1]
+                if change > 0:
+                    gains.append(change)
+                    losses.append(0)
+                else:
+                    gains.append(0)
+                    losses.append(abs(change))
+            
+            avg_gain = sum(gains) / period
+            avg_loss = sum(losses) / period
+            
+            if avg_loss == 0:
+                return 100.0
+            
+            rs = avg_gain / avg_loss
+            rsi = 100 - (100 / (1 + rs))
+            
+            return round(rsi, 2)
+            
+        except Exception as e:
+            print(f"❌ خطأ في حساب RSI: {e}")
+            return 50.0
+    
+    def __str__(self):
+        """عرض معلومات العميل"""
+        return f"BinanceClient (Spot Trading)"
